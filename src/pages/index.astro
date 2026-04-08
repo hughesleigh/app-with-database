@@ -1,0 +1,239 @@
+---
+import { getDashboardData } from '../lib/db';
+import Board from './partials/board.astro';
+
+const panel = Astro.url.searchParams.get('panel');
+const { panels, activePanelId } = getDashboardData(panel);
+const activePanelCategories = getDashboardData(activePanelId).categories;
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dashboard</title>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.3/Sortable.min.js"></script>
+    <style>
+      :root { --bg:#f6f7fb; --card:#fff; --text:#1c1f2a; --muted:#6d7387; --line:#dfe3ee; --accent:#4465ff; }
+      [data-theme='dark'] { --bg:#10131a; --card:#161a24; --text:#eef2ff; --muted:#a2acc7; --line:#2a3347; --accent:#86a2ff; }
+      body{margin:0;font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--text)}
+      .wrap{max-width:1100px;margin:0 auto;padding:24px}
+      .top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+      .tabs{display:flex;gap:8px;flex-wrap:wrap}.tab{padding:8px 12px;border:1px solid var(--line);background:var(--card);border-radius:999px;cursor:pointer}
+      .active{background:var(--accent);color:white;border-color:var(--accent)}
+      .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+      .controls{display:grid;grid-template-columns:2fr 3fr;gap:12px;margin:14px 0}.controls form{display:flex;gap:8px;flex-wrap:wrap}
+      input,select,button,textarea{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;padding:8px}
+      button{cursor:pointer}.ghost{background:transparent}.danger{color:#d65656}
+      .category-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+      .category{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px}.category header{display:flex;justify-content:space-between;align-items:center}
+      .row-head{display:flex;align-items:center;gap:8px}.drag-handle{cursor:grab;color:var(--muted)}
+      .link-list{list-style:none;padding:0;margin:8px 0 0;display:flex;flex-direction:column;gap:8px;min-height:30px}
+      .link-item{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:start;padding:10px;border:1px solid var(--line);border-radius:10px}
+      .link-main a{color:var(--text);text-decoration:none;font-weight:600}.link-main p,.link-main small{margin:2px 0;color:var(--muted)}
+      .item-actions{display:flex;gap:6px}
+      dialog{border:none;border-radius:12px;padding:0;max-width:520px;width:90%}dialog::backdrop{background:#0008}
+      .modal{padding:16px}.stack{display:flex;flex-direction:column;gap:8px}
+      .scratch{margin-top:12px}#flash{color:var(--muted);font-size:.9rem}
+    </style>
+  </head>
+  <body x-data="dashboardApp()" x-init="init()" :data-theme="theme" data-active-panel-id={activePanelId}>
+    <div class="wrap">
+      <div class="top">
+        <div>
+          <h1 x-text="greeting"></h1>
+          <div x-text="clock"></div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="search" placeholder="Search links" x-model="search" @input="filterLinks" />
+          <select x-model="theme" @change="persistTheme">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="tabs">
+        {panels.map((panelItem, index) => (
+          <a
+            href={`/?panel=${panelItem.id}`}
+            class={`tab ${panelItem.id === activePanelId ? 'active' : ''}`}
+            data-panel-index={index + 1}
+            >{panelItem.name}</a
+          >
+        ))}
+        <form hx-post="/api/panels" hx-swap="none" style="display:flex;gap:6px;align-items:center">
+          <input name="name" required placeholder="New panel" />
+          <button>Add</button>
+        </form>
+      </div>
+
+      <div class="controls">
+        <div class="card">
+          <strong>Add category</strong>
+          <form hx-post="/api/categories" hx-swap="none" data-async-form>
+            <input type="hidden" name="panelId" value={activePanelId} />
+            <input name="name" placeholder="Category name" required />
+            <button>Create</button>
+          </form>
+        </div>
+        <div class="card">
+          <strong>Add link</strong>
+          <form hx-post="/api/links" hx-swap="none" data-async-form>
+            <input type="hidden" name="panelId" value={activePanelId} />
+            <input name="name" placeholder="Link name" required />
+            <input name="url" type="url" placeholder="https://example.com" required />
+            <input name="description" placeholder="Description (optional)" />
+            <select id="category-select" name="categoryId" required>
+              <option value="">Select category</option>
+              {activePanelCategories.map((category) => <option value={category.id}>{category.name}</option>)}
+            </select>
+            <button>Add</button>
+          </form>
+        </div>
+      </div>
+
+      <div id="board"><Board /></div>
+      <div class="scratch card">
+        <strong>Scratchpad</strong>
+        <textarea rows="4" x-model="notes" @input.debounce.300ms="saveNotes" placeholder="Quick notes..."></textarea>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+          <button type="button" @click="saveNotes">Save note</button>
+          <button type="button" class="ghost danger" @click="clearNotes">Clear</button>
+          <small x-text="notesStatus"></small>
+        </div>
+      </div>
+      <div id="flash"></div>
+    </div>
+
+    <dialog id="modal" x-ref="modal" x-effect="openModal ? $refs.modal.showModal() : $refs.modal.close()">
+      <div class="modal">
+        <div id="modal-body"></div>
+        <button class="ghost" @click="openModal=false">Close</button>
+      </div>
+    </dialog>
+
+    <script>
+      function dashboardApp() {
+        return {
+          openModal: false,
+          theme: localStorage.getItem('theme') || 'system',
+          clock: '',
+          greeting: '',
+          notes: localStorage.getItem('scratchpad') || '',
+          notesStatus: localStorage.getItem('scratchpad') ? 'Loaded saved notes' : 'No saved notes yet',
+          search: '',
+          sortables: [],
+          init() {
+            this.updateClock();
+            setInterval(() => this.updateClock(), 1000);
+            this.applyTheme();
+            const bc = new BroadcastChannel('dashboard-sync');
+            bc.onmessage = () => this.refreshBoardAndControls();
+            document.body.addEventListener('dashboard-updated', () => {
+              bc.postMessage('refresh');
+              this.refreshBoardAndControls();
+            });
+            document.addEventListener('keydown', (event) => {
+              if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA') return;
+              const panel = document.querySelector(`[data-panel-index='${event.key}']`);
+              if (panel) window.location.href = panel.href;
+            });
+            this.enableDnD();
+            this.attachFormStateHandlers();
+            document.body.addEventListener('htmx:afterRequest', () => {
+              this.enableDnD();
+              this.filterLinks();
+            });
+          },
+          updateClock() {
+            const now = new Date();
+            this.clock = now.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+            const hour = now.getHours();
+            this.greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+          },
+          persistTheme() { localStorage.setItem('theme', this.theme); this.applyTheme(); },
+          applyTheme() {
+            const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            document.body.dataset.theme = this.theme === 'system' ? (systemDark ? 'dark' : 'light') : this.theme;
+          },
+          saveNotes() {
+            localStorage.setItem('scratchpad', this.notes);
+            this.notesStatus = `Saved at ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+          },
+          clearNotes() {
+            this.notes = '';
+            localStorage.removeItem('scratchpad');
+            this.notesStatus = 'Notes cleared';
+          },
+          filterLinks() {
+            const q = this.search.toLowerCase();
+            document.querySelectorAll('.link-item').forEach((item) => {
+              item.style.display = item.innerText.toLowerCase().includes(q) ? '' : 'none';
+            });
+          },
+          refreshBoardAndControls() {
+            const panel = new URLSearchParams(window.location.search).get('panel') || document.body.dataset.activePanelId || '';
+            htmx.ajax('GET', `/partials/board?panel=${panel}`, { target: '#board', swap: 'innerHTML' });
+            htmx.ajax('GET', `/api/categories/options?panel=${panel}`, { target: '#category-select', swap: 'innerHTML' });
+          },
+          attachFormStateHandlers() {
+            document.querySelectorAll('form[data-async-form]').forEach((form) => {
+              if (form.dataset.formWired === 'true') return;
+              form.dataset.formWired = 'true';
+              form.addEventListener('htmx:beforeRequest', () => {
+                form.querySelectorAll('button').forEach((button) => (button.disabled = true));
+              });
+              form.addEventListener('htmx:afterRequest', (event) => {
+                form.querySelectorAll('button').forEach((button) => (button.disabled = false));
+                if (event.detail.xhr.status >= 200 && event.detail.xhr.status < 300) {
+                  form.reset();
+                  const panelIdField = form.querySelector('input[name=\"panelId\"]');
+                  if (panelIdField) {
+                    const currentPanelId = new URLSearchParams(window.location.search).get('panel') || document.body.dataset.activePanelId || panelIdField.value;
+                    panelIdField.value = String(currentPanelId);
+                  }
+                }
+              });
+            });
+          },
+          enableDnD() {
+            this.sortables.forEach((instance) => instance.destroy());
+            this.sortables = [];
+            const panel = new URLSearchParams(window.location.search).get('panel') || document.body.dataset.activePanelId || '';
+            const categoryList = document.querySelector('[data-sortable-categories]');
+            if (categoryList) {
+              const categorySortable = Sortable.create(categoryList, {
+                handle: '.drag-handle',
+                animation: 120,
+                onEnd: () => {
+                  const categoryIds = [...categoryList.querySelectorAll('[data-category-id]')].map((e) => Number(e.dataset.categoryId));
+                  fetch('/api/categories/reorder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ panelId: Number(panel), categoryIds }) })
+                    .then(() => document.body.dispatchEvent(new Event('dashboard-updated')));
+                }
+              });
+              this.sortables.push(categorySortable);
+            }
+            document.querySelectorAll('[data-sortable-links]').forEach((list) => {
+              const linkSortable = Sortable.create(list, {
+                group: 'links', handle: '.drag-handle', animation: 120,
+                onEnd: () => {
+                  const payload = [...document.querySelectorAll('[data-sortable-links]')].map((ul) => ({
+                    categoryId: Number(ul.dataset.categoryId),
+                    linkIds: [...ul.querySelectorAll('[data-link-id]')].map((li) => Number(li.dataset.linkId))
+                  }));
+                  fetch('/api/links/reorder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lists: payload }) })
+                    .then(() => document.body.dispatchEvent(new Event('dashboard-updated')));
+                }
+              });
+              this.sortables.push(linkSortable);
+            });
+          }
+        }
+      }
+    </script>
+  </body>
+</html>
