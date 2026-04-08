@@ -1,0 +1,63 @@
+---
+import { getDashboardData } from '../../lib/db';
+
+const panel = Astro.url.searchParams.get('panel');
+const { categories } = getDashboardData(panel);
+---
+
+<div id="categories" class="category-grid" data-sortable-categories>
+  {
+    categories.map((category) => (
+      <section class="category" data-category-id={category.id}>
+        <header>
+          <div class="row-head">
+            <span class="drag-handle" title="Drag category">⋮⋮</span>
+            <h2>{category.name}</h2>
+          </div>
+          <button
+            class="ghost danger"
+            hx-delete={`/api/categories/${category.id}`}
+            hx-swap="none"
+            hx-target="#flash"
+            hx-confirm="Delete this category and all links inside it?"
+          >
+            Delete
+          </button>
+        </header>
+
+        <ul class="link-list" data-sortable-links data-category-id={category.id}>
+          {category.links.map((link) => (
+            <li class="link-item" data-link-id={link.id}>
+              <span class="drag-handle" title="Drag link">⋮⋮</span>
+              <div class="link-main">
+                <a href={link.url} target="_blank" rel="noreferrer">{link.name}</a>
+                {link.description && <p>{link.description}</p>}
+                <small>{link.url}</small>
+              </div>
+              <div class="item-actions">
+                <button
+                  class="ghost"
+                  hx-get={`/api/links/${link.id}/edit`}
+                  hx-target="#modal-body"
+                  hx-swap="innerHTML"
+                  @click="openModal = true"
+                >
+                  Edit
+                </button>
+                <button
+                  class="ghost danger"
+                  hx-delete={`/api/links/${link.id}`}
+                  hx-swap="none"
+                  hx-target="#flash"
+                  hx-confirm="Delete this link?"
+                >
+                  Delete
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+    ))
+  }
+</div>
