@@ -124,6 +124,12 @@ export function createLink(categoryId, name, url, description = '') {
   );
 }
 
+export function categoryBelongsToPanel(categoryId, panelId) {
+  const row = db.prepare('SELECT panel_id FROM categories WHERE id = ?').get(categoryId);
+  if (!row) return false;
+  return Number(row.panel_id) === Number(panelId);
+}
+
 export function updateLink(id, categoryId, name, url, description = '') {
   db.prepare('UPDATE links SET category_id = ?, name = ?, url = ?, description = ? WHERE id = ?').run(
     categoryId,

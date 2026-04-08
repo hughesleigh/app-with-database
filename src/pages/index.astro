@@ -4,6 +4,7 @@ import Board from './partials/board.astro';
 
 const panel = Astro.url.searchParams.get('panel');
 const { panels, activePanelId } = getDashboardData(panel);
+const activePanelCategories = getDashboardData(activePanelId).categories;
 ---
 
 <html lang="en">
@@ -38,7 +39,7 @@ const { panels, activePanelId } = getDashboardData(panel);
       .scratch{margin-top:12px}#flash{color:var(--muted);font-size:.9rem}
     </style>
   </head>
-  <body x-data="dashboardApp()" x-init="init()" :data-theme="theme">
+  <body x-data="dashboardApp()" x-init="init()" :data-theme="theme" data-active-panel-id={activePanelId}>
     <div class="wrap">
       <div class="top">
         <div>
@@ -73,7 +74,7 @@ const { panels, activePanelId } = getDashboardData(panel);
       <div class="controls">
         <div class="card">
           <strong>Add category</strong>
-          <form hx-post="/api/categories" hx-swap="none">
+          <form hx-post="/api/categories" hx-swap="none" data-async-form>
             <input type="hidden" name="panelId" value={activePanelId} />
             <input name="name" placeholder="Category name" required />
             <button>Create</button>
@@ -81,13 +82,14 @@ const { panels, activePanelId } = getDashboardData(panel);
         </div>
         <div class="card">
           <strong>Add link</strong>
-          <form hx-post="/api/links" hx-swap="none">
+          <form hx-post="/api/links" hx-swap="none" data-async-form>
+            <input type="hidden" name="panelId" value={activePanelId} />
             <input name="name" placeholder="Link name" required />
             <input name="url" type="url" placeholder="https://example.com" required />
             <input name="description" placeholder="Description (optional)" />
-            <select name="categoryId" required>
+            <select id="category-select" name="categoryId" required>
               <option value="">Select category</option>
-              {getDashboardData(activePanelId).categories.map((category) => <option value={category.id}>{category.name}</option>)}
+              {activePanelCategories.map((category) => <option value={category.id}>{category.name}</option>)}
             </select>
             <button>Add</button>
           </form>
@@ -98,6 +100,11 @@ const { panels, activePanelId } = getDashboardData(panel);
       <div class="scratch card">
         <strong>Scratchpad</strong>
         <textarea rows="4" x-model="notes" @input.debounce.300ms="saveNotes" placeholder="Quick notes..."></textarea>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+          <button type="button" @click="saveNotes">Save note</button>
+          <button type="button" class="ghost danger" @click="clearNotes">Clear</button>
+          <small x-text="notesStatus"></small>
+        </div>
       </div>
       <div id="flash"></div>
     </div>
@@ -117,16 +124,18 @@ const { panels, activePanelId } = getDashboardData(panel);
           clock: '',
           greeting: '',
           notes: localStorage.getItem('scratchpad') || '',
+          notesStatus: localStorage.getItem('scratchpad') ? 'Loaded saved notes' : 'No saved notes yet',
           search: '',
+          sortables: [],
           init() {
             this.updateClock();
             setInterval(() => this.updateClock(), 1000);
             this.applyTheme();
             const bc = new BroadcastChannel('dashboard-sync');
-            bc.onmessage = () => this.refreshBoard();
+            bc.onmessage = () => this.refreshBoardAndControls();
             document.body.addEventListener('dashboard-updated', () => {
               bc.postMessage('refresh');
-              this.refreshBoard();
+              this.refreshBoardAndControls();
             });
             document.addEventListener('keydown', (event) => {
               if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA') return;
@@ -134,6 +143,7 @@ const { panels, activePanelId } = getDashboardData(panel);
               if (panel) window.location.href = panel.href;
             });
             this.enableDnD();
+            this.attachFormStateHandlers();
             document.body.addEventListener('htmx:afterRequest', () => {
               this.enableDnD();
               this.filterLinks();
@@ -150,22 +160,53 @@ const { panels, activePanelId } = getDashboardData(panel);
             const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
             document.body.dataset.theme = this.theme === 'system' ? (systemDark ? 'dark' : 'light') : this.theme;
           },
-          saveNotes() { localStorage.setItem('scratchpad', this.notes); },
+          saveNotes() {
+            localStorage.setItem('scratchpad', this.notes);
+            this.notesStatus = `Saved at ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+          },
+          clearNotes() {
+            this.notes = '';
+            localStorage.removeItem('scratchpad');
+            this.notesStatus = 'Notes cleared';
+          },
           filterLinks() {
             const q = this.search.toLowerCase();
             document.querySelectorAll('.link-item').forEach((item) => {
               item.style.display = item.innerText.toLowerCase().includes(q) ? '' : 'none';
             });
           },
-          refreshBoard() {
-            const panel = new URLSearchParams(window.location.search).get('panel') || '';
+          refreshBoardAndControls() {
+            const panel = new URLSearchParams(window.location.search).get('panel') || document.body.dataset.activePanelId || '';
             htmx.ajax('GET', `/partials/board?panel=${panel}`, { target: '#board', swap: 'innerHTML' });
+            htmx.ajax('GET', `/api/categories/options?panel=${panel}`, { target: '#category-select', swap: 'innerHTML' });
+          },
+          attachFormStateHandlers() {
+            document.querySelectorAll('form[data-async-form]').forEach((form) => {
+              if (form.dataset.formWired === 'true') return;
+              form.dataset.formWired = 'true';
+              form.addEventListener('htmx:beforeRequest', () => {
+                form.querySelectorAll('button').forEach((button) => (button.disabled = true));
+              });
+              form.addEventListener('htmx:afterRequest', (event) => {
+                form.querySelectorAll('button').forEach((button) => (button.disabled = false));
+                if (event.detail.xhr.status >= 200 && event.detail.xhr.status < 300) {
+                  form.reset();
+                  const panelIdField = form.querySelector('input[name=\"panelId\"]');
+                  if (panelIdField) {
+                    const currentPanelId = new URLSearchParams(window.location.search).get('panel') || document.body.dataset.activePanelId || panelIdField.value;
+                    panelIdField.value = String(currentPanelId);
+                  }
+                }
+              });
+            });
           },
           enableDnD() {
-            const panel = new URLSearchParams(window.location.search).get('panel');
+            this.sortables.forEach((instance) => instance.destroy());
+            this.sortables = [];
+            const panel = new URLSearchParams(window.location.search).get('panel') || document.body.dataset.activePanelId || '';
             const categoryList = document.querySelector('[data-sortable-categories]');
             if (categoryList) {
-              Sortable.create(categoryList, {
+              const categorySortable = Sortable.create(categoryList, {
                 handle: '.drag-handle',
                 animation: 120,
                 onEnd: () => {
@@ -174,9 +215,10 @@ const { panels, activePanelId } = getDashboardData(panel);
                     .then(() => document.body.dispatchEvent(new Event('dashboard-updated')));
                 }
               });
+              this.sortables.push(categorySortable);
             }
             document.querySelectorAll('[data-sortable-links]').forEach((list) => {
-              Sortable.create(list, {
+              const linkSortable = Sortable.create(list, {
                 group: 'links', handle: '.drag-handle', animation: 120,
                 onEnd: () => {
                   const payload = [...document.querySelectorAll('[data-sortable-links]')].map((ul) => ({
@@ -187,13 +229,11 @@ const { panels, activePanelId } = getDashboardData(panel);
                     .then(() => document.body.dispatchEvent(new Event('dashboard-updated')));
                 }
               });
+              this.sortables.push(linkSortable);
             });
           }
         }
       }
-      document.body.addEventListener('htmx:afterRequest', (event) => {
-        if (event.detail.xhr.status < 300) document.body.dispatchEvent(new Event('dashboard-updated'));
-      });
     </script>
   </body>
 </html>
